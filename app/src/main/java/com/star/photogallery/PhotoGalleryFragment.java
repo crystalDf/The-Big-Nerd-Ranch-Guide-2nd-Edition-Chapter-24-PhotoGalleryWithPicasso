@@ -2,14 +2,9 @@ package com.star.photogallery;
 
 
 import android.content.res.Resources;
-import android.graphics.Bitmap;
-import android.graphics.drawable.BitmapDrawable;
-import android.graphics.drawable.Drawable;
 import android.os.AsyncTask;
 import android.os.Bundle;
-import android.os.Handler;
 import android.support.v4.app.Fragment;
-import android.support.v4.content.ContextCompat;
 import android.support.v7.widget.GridLayoutManager;
 import android.support.v7.widget.RecyclerView;
 import android.util.DisplayMetrics;
@@ -20,6 +15,8 @@ import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
 import android.widget.ImageView;
 
+import com.squareup.picasso.Picasso;
+
 import java.util.List;
 
 public class PhotoGalleryFragment extends Fragment {
@@ -29,13 +26,9 @@ public class PhotoGalleryFragment extends Fragment {
     private static final int DEFAULT_COLUMN_NUM = 3;
     private static final int ITEM_WIDTH = 100;
 
-    private static final int IMAGE_BUFFER_SIZE = 10;
-
     private RecyclerView mPhotoRecyclerView;
     private GridLayoutManager mGridLayoutManager;
     private List<GalleryItem> mGalleryItems;
-
-    private ThumbnailDownloader<PhotoHolder> mPhotoHolderThumbnailDownloader;
 
     private int mCurrentPage = 1;
     private int mFetchedPage = 0;
@@ -51,22 +44,6 @@ public class PhotoGalleryFragment extends Fragment {
         setRetainInstance(true);
 
         new FetchItemsTask().execute(mCurrentPage);
-
-        Handler responseHandler = new Handler();
-
-        mPhotoHolderThumbnailDownloader = new ThumbnailDownloader<>(responseHandler);
-        mPhotoHolderThumbnailDownloader.setThumbnailDownloadListener(
-                new ThumbnailDownloader.ThumbnailDownloadListener<PhotoHolder>() {
-                    @Override
-                    public void onThumbnailDownloaded(PhotoHolder photoHolder, Bitmap thumbnail) {
-                        Drawable drawable = new BitmapDrawable(getResources(), thumbnail);
-                        photoHolder.bindDrawable(drawable);
-                    }
-                }
-        );
-
-        mPhotoHolderThumbnailDownloader.start();
-        mPhotoHolderThumbnailDownloader.getLooper();
 
         Log.i(TAG, "Background thread started");
     }
@@ -97,41 +74,13 @@ public class PhotoGalleryFragment extends Fragment {
             public void onScrollStateChanged(RecyclerView recyclerView, int newState) {
                 super.onScrollStateChanged(recyclerView, newState);
 
-                int firstVisibleItemPosition = mGridLayoutManager.findFirstVisibleItemPosition();
-                int lastVisibleItemPosition = mGridLayoutManager.findLastVisibleItemPosition();
-
-                switch (newState) {
-                    case RecyclerView.SCROLL_STATE_IDLE:
-                        preloadImages(firstVisibleItemPosition);
-                        preloadImages(lastVisibleItemPosition);
-                        break;
-                    case RecyclerView.SCROLL_STATE_DRAGGING:
-                        mPhotoHolderThumbnailDownloader.clearPreloadQueue();
-                        break;
-                }
-
-                updateCurrentPage(firstVisibleItemPosition, lastVisibleItemPosition);
+                updateCurrentPage();
             }
         });
 
         setupAdapter();
         
         return view;
-    }
-
-    @Override
-    public void onDestroyView() {
-        super.onDestroyView();
-
-        mPhotoHolderThumbnailDownloader.clearQueue();
-    }
-
-    @Override
-    public void onDestroy() {
-        super.onDestroy();
-        mPhotoHolderThumbnailDownloader.quit();
-
-        Log.i(TAG, "Background thread destroyed");
     }
 
     private int convertPxToDp(float sizeInPx) {
@@ -162,8 +111,11 @@ public class PhotoGalleryFragment extends Fragment {
                     itemView.findViewById(R.id.fragment_photo_gallery_image_view);
         }
 
-        public void bindDrawable(Drawable drawable) {
-            mItemImageView.setImageDrawable(drawable);
+        public void bindGalleryItem(GalleryItem galleryItem) {
+            Picasso.with(getActivity())
+                    .load(galleryItem.getUrl())
+                    .placeholder(R.drawable.emma)
+                    .into(mItemImageView);
         }
     }
 
@@ -187,17 +139,7 @@ public class PhotoGalleryFragment extends Fragment {
         public void onBindViewHolder(PhotoHolder photoHolder, int position) {
             GalleryItem galleryItem = mGalleryItems.get(position);
 
-            Bitmap cachedBitmap =
-                    mPhotoHolderThumbnailDownloader.getLruCache().get(galleryItem.getUrl());
-
-            if (cachedBitmap != null) {
-                photoHolder.bindDrawable(new BitmapDrawable(getResources(), cachedBitmap));
-            } else {
-                Drawable placeHolder = ContextCompat.getDrawable(getContext(), R.drawable.emma);
-                photoHolder.bindDrawable(placeHolder);
-
-                mPhotoHolderThumbnailDownloader.queueThumbnail(photoHolder, galleryItem.getUrl());
-            }
+            photoHolder.bindGalleryItem(galleryItem);
 
         }
 
@@ -231,19 +173,10 @@ public class PhotoGalleryFragment extends Fragment {
         }
     }
 
-    private void preloadImages(int position) {
+    private void updateCurrentPage() {
+        int firstVisibleItemPosition = mGridLayoutManager.findFirstVisibleItemPosition();
+        int lastVisibleItemPosition = mGridLayoutManager.findLastVisibleItemPosition();
 
-        int startIndex = Math.max(position - IMAGE_BUFFER_SIZE, 0);
-        int endIndex = Math.min(position + IMAGE_BUFFER_SIZE, mGridLayoutManager.getItemCount() - 1);
-
-        for (int i = startIndex; i <= endIndex; i++) {
-            if (i != position) {
-                mPhotoHolderThumbnailDownloader.preloadImage(mGalleryItems.get(i).getUrl());
-            }
-        }
-    }
-
-    private void updateCurrentPage(int firstVisibleItemPosition, int lastVisibleItemPosition) {
         if (lastVisibleItemPosition == (mGridLayoutManager.getItemCount() - 1) &&
                 mCurrentPage == mFetchedPage ) {
             mCurrentPosition = firstVisibleItemPosition + 3;
